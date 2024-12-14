@@ -266,6 +266,6 @@ While maintaining our commitment to simplicity, we're considering:
 
 Remember: AetherLink's strength lies in its simplicity and reliability. We carefully consider new features to maintain this balance.
 
-*Made with ❤️ for the our community*
+<p align="center">Built with ❤️ for developers who value simplicity and security</p>
 
 These Project is provided as-is, without warranty of any kind. 
