@@ -1,5 +1,5 @@
 # install.sh
-#!/usr/bin
+#!/bin/bash
 set -euo pipefail
 
 # AetherLink Installation Script
