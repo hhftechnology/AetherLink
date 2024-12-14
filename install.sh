@@ -144,4 +144,4 @@ echo "1. Source your bashrc: source ~/.bashrc"
 echo "2. Start the server: aetherlink-server"
 echo "3. Create a tunnel: aetherlink yourdomain.com 443 --local-port 8080"
 echo
-echo "For more information, see the documentation in the project repository."
+echo "For more information, see the documentation in the https://github.com/hhftechnology/AetherLink repository."
