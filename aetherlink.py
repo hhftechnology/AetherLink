@@ -13,6 +13,7 @@ from typing import Optional
 from urllib import request
 from urllib.error import URLError
 
+
 class AetherLink:
     """
     AetherLink - Secure and reliable tunnel manager
