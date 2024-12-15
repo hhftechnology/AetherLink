@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 
-import sys
+import argparse
 import json
-import time
 import logging
+import os
+import signal
+import socket
+import sys
+import threading
+import time
+from typing import Optional
 from urllib import request
 from urllib.error import URLError
-from typing import Optional
-import signal
-import argparse
-import socket
-import threading
-import os
-
 
 class AetherLink:
     """
