@@ -7,7 +7,7 @@ import time
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Generator
 from urllib import request
 from urllib.error import URLError
 import signal
@@ -171,7 +171,7 @@ class AetherLink:
             time.sleep(self.config.health_check_interval)
 
     @contextmanager
-    def _tunnel_lifecycle(self) -> bool:
+    def _tunnel_lifecycle(self) -> Generator[bool, None, None]:
         """Manage tunnel lifecycle"""
         try:
             if not self.create_tunnel():
