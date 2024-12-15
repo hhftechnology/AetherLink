@@ -1,82 +1,140 @@
 #!/usr/bin/env python3
 
-"""
-AetherLink - Secure and reliable tunnel manager for creating and managing 
-secure tunnels between local and remote services. This module provides the core
-functionality for tunnel creation, management, and monitoring.
-"""
-
+from __future__ import annotations
 import sys
 import json
 import time
 import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Dict, Any
 from urllib import request
 from urllib.error import URLError
-from typing import Optional
 import signal
 import argparse
 import socket
 import threading
 import os
+from contextlib import contextmanager
 
-class AetherLink:
-    """
-    AetherLink - Secure and reliable tunnel manager
-    Creates and manages secure tunnels between local and remote services
-    """
-    
-    def __init__(self, host: str, port: str, local_port: str = None):
+@dataclass
+class TunnelConfig:
+    """Configuration for tunnel setup"""
+    host: str
+    port: str
+    local_port: str
+    base_url: str = "http://127.0.0.1:2019"
+    health_check_interval: int = 5
+
+    @property
+    def tunnel_id(self) -> str:
+        """Generate unique tunnel identifier"""
+        return f"aetherlink-{self.host}-{self.port}"
+
+class ServiceHealth:
+    """Health monitoring for services"""
+    def __init__(self, host: str, port: int, timeout: int = 30):
         self.host = host
         self.port = port
-        self.local_port = local_port or port
-        self.tunnel_id = f"aetherlink-{host}-{port}"
-        self.base_url = "http://127.0.0.1:2019"
+        self.timeout = timeout
+        self.logger = logging.getLogger('ServiceHealth')
+
+    def check(self, service_name: str = "Service") -> bool:
+        """Check service availability"""
+        self.logger.info(f"Checking {service_name} on {self.host}:{self.port}...")
+        start_time = time.time()
+        
+        while time.time() - start_time < self.timeout:
+            try:
+                with socket.create_connection((self.host, self.port), timeout=2):
+                    self.logger.info(f"{service_name} is available")
+                    return True
+            except (socket.timeout, socket.error) as e:
+                if time.time() - start_time >= self.timeout:
+                    self.logger.error(f"{service_name} unavailable: {e}")
+                    return False
+            time.sleep(1)
+        return False
+
+class HTTPClient:
+    """HTTP client with retry capability"""
+    def __init__(self, base_url: str, timeout: int = 10, max_retries: int = 3):
+        self.base_url = base_url
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.logger = logging.getLogger('HTTPClient')
+
+    def request(self, method: str, endpoint: str, data: Optional[Dict[str, Any]] = None) -> bool:
+        """Make HTTP request with retries"""
+        headers = {'Content-Type': 'application/json'} if data else {}
+        encoded_data = json.dumps(data).encode('utf-8') if data else None
+
+        for attempt in range(self.max_retries):
+            try:
+                req = request.Request(
+                    method=method,
+                    url=f"{self.base_url}{endpoint}",
+                    headers=headers,
+                    data=encoded_data
+                )
+                with request.urlopen(req, timeout=self.timeout) as response:
+                    return response.status == 200
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    self.logger.error(f"Request failed after {self.max_retries} attempts: {e}")
+                    return False
+                time.sleep(1)
+        return False
+
+class AetherLink:
+    """AetherLink - Secure and reliable tunnel manager"""
+    
+    def __init__(self, config: TunnelConfig):
+        self.config = config
         self.is_running = True
+        self.http_client = HTTPClient(config.base_url)
         self._setup_environment()
-        self.setup_logging()
-        self.setup_signal_handlers()
-        self.health_check_interval = 5
+        self._setup_logging()
+        self._setup_signal_handlers()
 
-    def _setup_environment(self):
-        """Setup necessary directories and files"""
-        os.makedirs('logs', exist_ok=True)
-        os.makedirs('config', exist_ok=True)
+    def _setup_environment(self) -> None:
+        """Initialize required directories"""
+        Path('logs').mkdir(exist_ok=True)
+        Path('config').mkdir(exist_ok=True)
 
-    def setup_logging(self):
-        """Configure logging with both file and console output"""
+    def _setup_logging(self) -> None:
+        """Configure logging system"""
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler(os.path.join('logs', 'aetherlink.log'))
+                logging.FileHandler(Path('logs') / 'aetherlink.log')
             ]
         )
         self.logger = logging.getLogger('AetherLink')
 
-    def setup_signal_handlers(self):
-        """Setup handlers for graceful shutdown"""
-        signal.signal(signal.SIGINT, self.handle_shutdown)
-        signal.signal(signal.SIGTERM, self.handle_shutdown)
+    def _setup_signal_handlers(self) -> None:
+        """Configure graceful shutdown handlers"""
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
 
-    def create_route_config(self) -> dict:
-        """Create the routing configuration for the tunnel"""
+    def _create_route_config(self) -> Dict[str, Any]:
+        """Generate routing configuration"""
         return {
-            "@id": self.tunnel_id,
-            "match": [{
-                "host": [self.host],
-            }],
+            "@id": self.config.tunnel_id,
+            "match": [{"host": [self.config.host]}],
             "handle": [{
                 "handler": "reverse_proxy",
                 "upstreams": [{
-                    "dial": f"127.0.0.1:{self.local_port}"
+                    "dial": f"127.0.0.1:{self.config.local_port}"
                 }],
                 "health_checks": {
                     "active": {
                         "interval": "10s",
                         "timeout": "5s",
                         "uri": "/",
-                        "host": self.host
+                        "host": self.config.host
                     },
                     "passive": {
                         "fail_duration": "30s",
@@ -91,7 +149,7 @@ class AetherLink:
                     "dial_timeout": "10s",
                     "response_header_timeout": "30s",
                     "keep_alive": {
-                        "enabled": true,
+                        "enabled": True,
                         "probe_interval": "30s",
                         "idle_timeout": "120s"
                     }
@@ -99,107 +157,69 @@ class AetherLink:
             }]
         }
 
-    def wait_for_service(self, host: str, port: int, timeout: int = 30, service_name: str = "Service") -> bool:
-        """Generic service availability checker"""
-        self.logger.info(f"Waiting for {service_name} on {host}:{port}...")
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                with socket.create_connection((host, port), timeout=2) as sock:
-                    self.logger.info(f"{service_name} is available")
-                    return True
-            except (socket.timeout, socket.error) as e:
-                if time.time() - start_time >= timeout:
-                    self.logger.error(f"{service_name} is not available: {e}")
-                    return False
-            time.sleep(1)
-        return False
-
-    def wait_for_local_service(self) -> bool:
-        """Wait for local service to become available"""
-        return self.wait_for_service('127.0.0.1', int(self.local_port), 
-                                   service_name="Local service")
-
-    def wait_for_caddy(self) -> bool:
-        """Wait for Caddy admin API to become available"""
-        return self.wait_for_service('127.0.0.1', 2019, 
-                                   service_name="Caddy admin API")
-
-    def make_request(self, method: str, url: str, data: Optional[dict] = None, 
-                    retries: int = 3) -> bool:
-        """Make HTTP request with retries"""
-        for attempt in range(retries):
-            try:
-                headers = {'Content-Type': 'application/json'} if data else {}
-                req = request.Request(
-                    method=method,
-                    url=f"{self.base_url}{url}",
-                    headers=headers,
-                    data=json.dumps(data).encode('utf-8') if data else None
-                )
-                with request.urlopen(req, timeout=10) as response:
-                    return response.status == 200
-            except Exception as e:
-                if attempt == retries - 1:
-                    self.logger.error(f"Request failed after {retries} attempts: {e}")
-                    return False
-                time.sleep(1)
-        return False
-
-    def handle_shutdown(self, signum, frame):
-        """Handle shutdown signals gracefully"""
-        self.logger.info("Received shutdown signal")
+    def _handle_shutdown(self, signum: int, frame: Any) -> None:
+        """Handle shutdown signals"""
+        self.logger.info("Shutdown signal received")
         self.is_running = False
 
-    def monitor_health(self):
-        """Monitor the health of local service and tunnel"""
+    def _monitor_health(self) -> None:
+        """Monitor local service health"""
+        health_checker = ServiceHealth('127.0.0.1', int(self.config.local_port))
         while self.is_running:
-            if not self.wait_for_service('127.0.0.1', int(self.local_port), 
-                                       timeout=2, service_name="Local service"):
-                self.logger.error("Local service is not responding")
-            time.sleep(self.health_check_interval)
+            if not health_checker.check("Local service"):
+                self.logger.error("Local service unresponsive")
+            time.sleep(self.config.health_check_interval)
 
-    def create_tunnel(self) -> bool:
-        """Create the tunnel with all necessary checks"""
-        if not self.wait_for_local_service():
-            return False
-
-        if not self.wait_for_caddy():
-            return False
-
-        self.logger.info(f"Creating tunnel for {self.host}:{self.port}")
-        config = self.create_route_config()
-        return self.make_request('POST',
-                               '/config/apps/http/servers/aetherlink/routes',
-                               config)
-
-    def delete_tunnel(self) -> bool:
-        """Clean up the tunnel"""
-        self.logger.info("Cleaning up tunnel")
-        return self.make_request('DELETE', f'/id/{self.tunnel_id}')
-
-    def run(self):
-        """Main execution loop"""
-        if not self.create_tunnel():
-            self.logger.error("Failed to create tunnel")
-            return
-
-        self.logger.info("Tunnel created successfully")
-        
-        # Start health monitoring in the background
-        health_thread = threading.Thread(target=self.monitor_health)
-        health_thread.daemon = True
-        health_thread.start()
-        
+    @contextmanager
+    def _tunnel_lifecycle(self) -> bool:
+        """Manage tunnel lifecycle"""
         try:
-            while self.is_running:
-                time.sleep(1)
+            if not self.create_tunnel():
+                raise RuntimeError("Failed to create tunnel")
+            yield True
         finally:
             if not self.delete_tunnel():
                 self.logger.error("Failed to clean up tunnel")
 
-def main():
-    """Entry point for the AetherLink application"""
+    def create_tunnel(self) -> bool:
+        """Create and configure tunnel"""
+        health_checker = ServiceHealth('127.0.0.1', int(self.config.local_port))
+        caddy_checker = ServiceHealth('127.0.0.1', 2019)
+
+        if not all([
+            health_checker.check("Local service"),
+            caddy_checker.check("Caddy admin API")
+        ]):
+            return False
+
+        self.logger.info(f"Creating tunnel for {self.config.host}:{self.config.port}")
+        return self.http_client.request(
+            'POST',
+            '/config/apps/http/servers/aetherlink/routes',
+            self._create_route_config()
+        )
+
+    def delete_tunnel(self) -> bool:
+        """Remove tunnel configuration"""
+        self.logger.info("Cleaning up tunnel")
+        return self.http_client.request('DELETE', f'/id/{self.config.tunnel_id}')
+
+    def run(self) -> None:
+        """Main execution loop"""
+        with self._tunnel_lifecycle() as success:
+            if not success:
+                return
+
+            self.logger.info("Tunnel created successfully")
+            health_thread = threading.Thread(target=self._monitor_health)
+            health_thread.daemon = True
+            health_thread.start()
+
+            while self.is_running:
+                time.sleep(1)
+
+def main() -> None:
+    """CLI entry point"""
     parser = argparse.ArgumentParser(
         description='AetherLink - Secure and reliable tunnel manager',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -210,11 +230,15 @@ def main():
     parser.add_argument('--log-level', default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                        help='Set the logging level')
-    
+
     args = parser.parse_args()
+    config = TunnelConfig(
+        host=args.host,
+        port=args.port,
+        local_port=args.local_port or args.port
+    )
     
-    aetherlink = AetherLink(args.host, args.port, args.local_port)
-    aetherlink.run()
+    AetherLink(config).run()
 
 if __name__ == '__main__':
     main()
