@@ -13,39 +13,84 @@ CADDY_VERSION="2.7.6"
 INSTALL_DIR="${HOME}/.aetherlink"
 LOGFILE="${INSTALL_DIR}/logs/install.log"
 
+# Function to check if we're running as root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "This script must be run as root. Please use sudo or run as root." >&2
+        exit 1
+    fi
+}
+
+# Function to detect OS and version
+detect_os() {
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck source=/dev/null
+        . /etc/os-release
+        OS="${ID}"
+        VERSION="${VERSION_ID}"
+        echo "Detected OS: ${OS} ${VERSION}"
+    else
+        echo "Unable to detect OS. This script requires Ubuntu or Debian." >&2
+        exit 1
+    fi
+}
+
+# Function to install system dependencies
+install_system_dependencies() {
+    echo "Installing required system packages..."
+    
+    local packages=(
+        curl
+        tar
+        openssl
+        python3
+        python3-venv
+        python3-full
+        python3-pip
+        build-essential
+        libssl-dev
+        libffi-dev
+        netcat
+    )
+    
+    case "${OS}" in
+        "ubuntu"|"debian")
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
+            ;;
+        *)
+            echo "Unsupported operating system: ${OS}" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Function to verify system Python setup
+verify_python_setup() {
+    echo "Verifying Python installation..."
+    
+    local min_python_version="3.7"
+    local python_version
+    python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+    
+    if ! printf '%s\n%s\n' "$min_python_version" "$python_version" | sort -C -V; then
+        echo "Error: Python version $python_version is below minimum required version $min_python_version" >&2
+        exit 1
+    fi
+    
+    # Verify venv module is working
+    if ! python3 -c "import venv" >/dev/null 2>&1; then
+        echo "Error: Python venv module not working properly" >&2
+        exit 1
+    fi
+}
+
 # Function to set up logging
 setup_logging() {
     mkdir -p "$(dirname "$LOGFILE")"
     exec 1> >(tee -a "$LOGFILE")
     exec 2> >(tee -a "$LOGFILE" >&2)
     echo "Installation started at $(date)"
-}
-
-# Function to check system requirements
-check_system_requirements() {
-    echo "Checking system requirements..."
-    
-    if [[ "$(uname -s)" != "Linux" ]]; then
-        echo "Error: This installer only supports Linux systems" >&2
-        exit 1
-    fi
-    
-    local required_commands=("curl" "tar" "openssl" "python3" "pip3")
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            echo "Error: Required command not found: $cmd" >&2
-            echo "Please install the missing dependencies and try again" >&2
-            exit 1
-        fi
-    done
-    
-    local min_python_version="3.7"
-    local python_version
-    python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-    if ! printf '%s\n%s\n' "$min_python_version" "$python_version" | sort -C -V; then
-        echo "Error: Python version $python_version is below minimum required version $min_python_version" >&2
-        exit 1
-    fi
 }
 
 # Function to create directory structure
@@ -58,6 +103,7 @@ create_directory_structure() {
         "$INSTALL_DIR/logs"
         "$INSTALL_DIR/certs"
         "$INSTALL_DIR/data"
+        "$INSTALL_DIR/lib"
     )
     
     for dir in "${directories[@]}"; do
@@ -99,8 +145,9 @@ configure_caddy() {
     echo "Configuring Caddy..."
     
     # Set up Caddy to bind to privileged ports
-    if ! sudo setcap 'cap_net_bind_service=+ep' "$INSTALL_DIR/bin/caddy"; then
-        echo "Warning: Failed to set capabilities for Caddy. You may need to run with sudo for ports < 1024"
+    if ! setcap 'cap_net_bind_service=+ep' "$INSTALL_DIR/bin/caddy"; then
+        echo "Error: Failed to set capabilities for Caddy" >&2
+        exit 1
     fi
     
     # Create default configuration
@@ -126,34 +173,64 @@ configure_caddy() {
 EOF
 }
 
-# Function to install Python dependencies
-install_python_dependencies() {
-    echo "Installing Python dependencies..."
-    pip3 install --user --upgrade pip
-    pip3 install --user requests urllib3 cryptography
+# Function to set up Python virtual environment and install dependencies
+setup_python_environment() {
+    echo "Setting up Python virtual environment..."
+    
+    # Create virtual environment
+    python3 -m venv "${INSTALL_DIR}/venv"
+    
+    # Activate virtual environment and install dependencies
+    # shellcheck source=/dev/null
+    . "${INSTALL_DIR}/venv/bin/activate"
+    
+    # Upgrade pip in virtual environment
+    "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip
+    
+    # Install required packages
+    "${INSTALL_DIR}/venv/bin/pip" install requests urllib3 cryptography
+    
+    deactivate
 }
 
-# Function to create command line tools
-create_cli_tools() {
-    echo "Creating command line tools..."
+# Function to install AetherLink Python script
+install_aetherlink_script() {
+    echo "Installing AetherLink Python script..."
     
+    # Copy the Python script
+    cp sirtunnel.py "${INSTALL_DIR}/bin/aetherlink.py"
+    chmod 755 "${INSTALL_DIR}/bin/aetherlink.py"
+    
+    # Create the launcher script
     cat > "$INSTALL_DIR/bin/aetherlink" << 'EOF'
 #!/bin/bash
 AETHERLINK_HOME="${HOME}/.aetherlink"
 export PYTHONPATH="${AETHERLINK_HOME}/lib:${PYTHONPATH:-}"
-exec python3 "${AETHERLINK_HOME}/bin/aetherlink.py" "$@"
+exec "${AETHERLINK_HOME}/venv/bin/python3" "${AETHERLINK_HOME}/bin/aetherlink.py" "$@"
 EOF
     
     chmod 755 "$INSTALL_DIR/bin/aetherlink"
+}
+
+# Function to configure shell environment
+configure_shell_environment() {
+    echo "Configuring shell environment..."
     
-    local rc_file="${HOME}/.bashrc"
-    [[ -f "${HOME}/.zshrc" ]] && rc_file="${HOME}/.zshrc"
+    local shell_config
+    if [[ -f "${HOME}/.zshrc" ]]; then
+        shell_config="${HOME}/.zshrc"
+    else
+        shell_config="${HOME}/.bashrc"
+    fi
     
-    if ! grep -q "AETHERLINK_HOME" "$rc_file"; then
+    # Add environment variables if not already present
+    if ! grep -q "AETHERLINK_HOME" "$shell_config"; then
         {
+            echo
+            echo "# AetherLink environment configuration"
             echo "export AETHERLINK_HOME=\"\${HOME}/.aetherlink\""
             echo "export PATH=\"\${AETHERLINK_HOME}/bin:\${PATH}\""
-        } >> "$rc_file"
+        } >> "$shell_config"
     fi
 }
 
@@ -164,7 +241,9 @@ verify_installation() {
     local check_paths=(
         "$INSTALL_DIR/bin/caddy"
         "$INSTALL_DIR/bin/aetherlink"
+        "$INSTALL_DIR/bin/aetherlink.py"
         "$INSTALL_DIR/config/aetherlink_config.json"
+        "$INSTALL_DIR/venv/bin/python3"
     )
     
     for path in "${check_paths[@]}"; do
@@ -174,8 +253,15 @@ verify_installation() {
         fi
     done
     
+    # Verify Caddy installation
     if ! "$INSTALL_DIR/bin/caddy" version >/dev/null 2>&1; then
         echo "Error: Caddy installation verification failed" >&2
+        exit 1
+    fi
+    
+    # Verify Python environment
+    if ! "${INSTALL_DIR}/venv/bin/python3" -c "import requests, urllib3, cryptography" >/dev/null 2>&1; then
+        echo "Error: Python dependencies verification failed" >&2
         exit 1
     fi
 }
@@ -190,13 +276,17 @@ cleanup() {
 main() {
     echo "Starting AetherLink installation..."
     
+    check_root
+    detect_os
+    install_system_dependencies
+    verify_python_setup
     setup_logging
-    check_system_requirements
     create_directory_structure
     download_caddy
     configure_caddy
-    install_python_dependencies
-    create_cli_tools
+    setup_python_environment
+    install_aetherlink_script
+    configure_shell_environment
     verify_installation
     cleanup
     
