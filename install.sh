@@ -1,147 +1,230 @@
-#!/bin/sh
-# Using sh for maximum compatibility
+#!/bin/bash
 
-# Strict mode
-set -e
+# AetherLink Installation Script
+# This script handles the installation of AetherLink and its dependencies with
+# comprehensive error handling, security checks, and system validation.
 
-# Configuration
-CADDY_VERSION="2.8.4"
-CADDY_ARCH="linux_amd64"
-TEMP_DIR=$(mktemp -d)
-PROJECT_DIR="$HOME/.aetherlink"
+set -euo pipefail
 
-# Color output (if supported)
-if [ -t 1 ]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    BLUE='\033[0;34m'
-    NC='\033[0m'
-else
-    RED=''
-    GREEN=''
-    BLUE=''
-    NC=''
-fi
+# Configuration variables
+AETHERLINK_VERSION="2.1.1"
+CADDY_VERSION="2.7.6"
+INSTALL_DIR="${HOME}/.aetherlink"
+CADDY_CHECKSUM="e392c5c071a43f829d2f0532417ff6973392cd6e9519826684ad9de6df343af3"
 
-# Logging functions
-log() {
-    printf "${BLUE}[%s] %s${NC}\n" "$(date +'%Y-%m-%d %H:%M:%S')" "$1"
+# Logging setup
+setup_logging() {
+    LOGFILE="${INSTALL_DIR}/logs/install.log"
+    mkdir -p "$(dirname "$LOGFILE")"
+    exec 1> >(tee -a "$LOGFILE")
+    exec 2> >(tee -a "$LOGFILE" >&2)
+    echo "Installation started at $(date)"
 }
 
-error() {
-    printf "${RED}[ERROR] %s${NC}\n" "$1"
-    exit 1
-}
-
-success() {
-    printf "${GREEN}[SUCCESS] %s${NC}\n" "$1"
-}
-
-# Clean up on exit
-cleanup() {
-    rm -rf "$TEMP_DIR"
-}
-trap cleanup EXIT
-
-# Check if running as root (POSIX-compliant way)
-if [ "$(id -u)" = "0" ]; then 
-    error "Please don't run as root. Use sudo when needed."
-fi
-
-# ASCII Art Banner
-cat << 'EOF'
-    ___       __  __           __    _      __  
-   /   | ____/ /_/ /_  ___   / /   (_)____/ /__
-  / /| |/ __  / / __ \/ _ \ / /   / / ___/ //_/
- / ___ / /_/ / / / / /  __// /___/ / /  / ,<   
-/_/  |_\__,_/_/_/ /_/\___//_____/_/_/  /_/|_|  
-EOF
-echo "Installing AetherLink v${CADDY_VERSION}"
-echo "--------------------------------"
-
-# Create project directory structure
-log "Creating project directory structure..."
-mkdir -p "${PROJECT_DIR}/bin" "${PROJECT_DIR}/config" "${PROJECT_DIR}/logs" "${PROJECT_DIR}/data" "${PROJECT_DIR}/certs"
-
-# Check for required commands
-for cmd in curl tar sudo; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        error "$cmd is required but not installed. Please install $cmd first."
+# System requirements check
+check_system_requirements() {
+    echo "Checking system requirements..."
+    
+    # Check OS compatibility
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "Error: This installer only supports Linux systems" >&2
+        exit 1
+    }
+    
+    # Check required commands
+    local required_commands=("curl" "tar" "openssl" "python3" "pip3")
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            echo "Error: Required command not found: $cmd" >&2
+            echo "Please install the missing dependencies and try again" >&2
+            exit 1
+        fi
+    done
+    
+    # Check minimum Python version
+    local min_python_version="3.7"
+    local python_version
+    python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+    if ! printf '%s\n%s\n' "$min_python_version" "$python_version" | sort -C -V; then
+        echo "Error: Python version $python_version is below minimum required version $min_python_version" >&2
+        exit 1
     fi
-done
+}
+
+# Create installation directory structure
+create_directory_structure() {
+    echo "Creating directory structure..."
+    local directories=(
+        "$INSTALL_DIR"
+        "$INSTALL_DIR/bin"
+        "$INSTALL_DIR/config"
+        "$INSTALL_DIR/logs"
+        "$INSTALL_DIR/certs"
+        "$INSTALL_DIR/data"
+    )
+    
+    for dir in "${directories[@]}"; do
+        mkdir -p "$dir"
+        chmod 750 "$dir"
+    done
+}
 
 # Download and verify Caddy
-log "Downloading Caddy ${CADDY_VERSION}..."
-CADDY_FILE="caddy_${CADDY_VERSION}_${CADDY_ARCH}.tar.gz"
-DOWNLOAD_URL="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/${CADDY_FILE}"
-
-if ! curl -sS -L --retry 3 --retry-delay 2 "$DOWNLOAD_URL" -o "$TEMP_DIR/$CADDY_FILE"; then
-    error "Failed to download Caddy"
-fi
-
-# Extract Caddy
-log "Extracting Caddy..."
-if ! tar xf "$TEMP_DIR/$CADDY_FILE" -C "$TEMP_DIR"; then
-    error "Failed to extract Caddy"
-fi
-
-# Move binary to project directory
-mv "$TEMP_DIR/caddy" "${PROJECT_DIR}/bin/"
-
-# Set capabilities
-log "Setting Caddy capabilities..."
-if ! sudo setcap 'cap_net_bind_service=+ep' "${PROJECT_DIR}/bin/caddy"; then
-    error "Failed to set Caddy capabilities"
-fi
-
-# Copy configuration files
-log "Setting up configuration files..."
-if [ -f "config/aetherlink_config.json" ]; then
-    cp config/aetherlink_config.json "${PROJECT_DIR}/config/"
-else
-    error "Configuration file config/aetherlink_config.json not found"
-fi
-
-if [ -f "aetherlink.py" ]; then
-    cp aetherlink.py "${PROJECT_DIR}/bin/"
-    chmod +x "${PROJECT_DIR}/bin/aetherlink.py"
-else
-    error "aetherlink.py not found"
-fi
-
-# Create symlinks
-log "Creating symlinks..."
-if ! sudo ln -sf "${PROJECT_DIR}/bin/aetherlink.py" /usr/local/bin/aetherlink; then
-    error "Failed to create symlink for aetherlink"
-fi
-
-if ! sudo ln -sf "${PROJECT_DIR}/bin/caddy" /usr/local/bin/aetherlink-caddy; then
-    error "Failed to create symlink for aetherlink-caddy"
-fi
-
-# Set up environment
-log "Setting up environment..."
-BASHRC="$HOME/.bashrc"
-if [ -f "$BASHRC" ]; then
-    # Only add if not already present
-    if ! grep -q "AETHERLINK_HOME" "$BASHRC"; then
-        printf '\n# AetherLink Environment\n' >> "$BASHRC"
-        printf 'export AETHERLINK_HOME="%s"\n' "$HOME/.aetherlink" >> "$BASHRC"
-        printf 'export PATH="$AETHERLINK_HOME/bin:$PATH"\n' >> "$BASHRC"
+download_caddy() {
+    echo "Downloading Caddy ${CADDY_VERSION}..."
+    local caddy_url="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+    local download_path="/tmp/caddy.tar.gz"
+    
+    # Download with retry mechanism
+    local max_retries=3
+    local retry=0
+    while [[ $retry -lt $max_retries ]]; do
+        if curl -L --fail --silent --show-error "$caddy_url" -o "$download_path"; then
+            break
+        fi
+        ((retry++))
+        echo "Download failed, retrying ($retry/$max_retries)..."
+        sleep 2
+    done
+    
+    if [[ $retry -eq $max_retries ]]; then
+        echo "Error: Failed to download Caddy after $max_retries attempts" >&2
+        exit 1
     fi
-else
-    log "Warning: ~/.bashrc not found, skipping environment setup"
-fi
+    
+    # Verify checksum
+    local computed_checksum
+    computed_checksum=$(sha256sum "$download_path" | cut -d' ' -f1)
+    if [[ "$computed_checksum" != "$CADDY_CHECKSUM" ]]; then
+        echo "Error: Caddy checksum verification failed" >&2
+        rm -f "$download_path"
+        exit 1
+    fi
+    
+    # Extract Caddy
+    tar xzf "$download_path" -C "$INSTALL_DIR/bin" caddy
+    rm -f "$download_path"
+    chmod 755 "$INSTALL_DIR/bin/caddy"
+}
 
-success "Installation completed successfully!"
-echo
-echo "AetherLink has been installed to: ${PROJECT_DIR}"
-echo "Configuration files are in: ${PROJECT_DIR}/config"
-echo "Logs will be stored in: ${PROJECT_DIR}/logs"
-echo
-echo "To start using AetherLink:"
-echo "1. Source your bashrc: source ~/.bashrc"
-echo "2. Start the server: aetherlink-server"
-echo "3. Create a tunnel: aetherlink yourdomain.com 443 --local-port 8080"
-echo
-echo "For more information, see the documentation in the https://github.com/hhftechnology/AetherLink repository."
+# Configure Caddy
+configure_caddy() {
+    echo "Configuring Caddy..."
+    
+    # Set up Caddy to bind to privileged ports
+    if ! sudo setcap 'cap_net_bind_service=+ep' "$INSTALL_DIR/bin/caddy"; then
+        echo "Warning: Failed to set capabilities for Caddy. You may need to run with sudo for ports < 1024"
+    fi
+    
+    # Create default configuration
+    cat > "$INSTALL_DIR/config/aetherlink_config.json" << EOF
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "aetherlink": {
+          "listen": [":443"],
+          "routes": [],
+          "timeouts": {
+            "read_body": "10s",
+            "read_header": "10s",
+            "write": "30s",
+            "idle": "120s"
+          }
+        }
+      }
+    }
+  }
+}
+EOF
+}
+
+# Install Python dependencies
+install_python_dependencies() {
+    echo "Installing Python dependencies..."
+    pip3 install --user --upgrade pip
+    pip3 install --user requests urllib3 cryptography
+}
+
+# Create command line tools
+create_cli_tools() {
+    echo "Creating command line tools..."
+    
+    # Create aetherlink command wrapper
+    cat > "$INSTALL_DIR/bin/aetherlink" << 'EOF'
+#!/bin/bash
+AETHERLINK_HOME="${HOME}/.aetherlink"
+export PYTHONPATH="${AETHERLINK_HOME}/lib:${PYTHONPATH:-}"
+exec python3 "${AETHERLINK_HOME}/bin/aetherlink.py" "$@"
+EOF
+    
+    chmod 755 "$INSTALL_DIR/bin/aetherlink"
+    
+    # Add to PATH if not already present
+    local rc_file
+    if [[ -f "${HOME}/.zshrc" ]]; then
+        rc_file="${HOME}/.zshrc"
+    else
+        rc_file="${HOME}/.bashrc"
+    fi
+    
+    if ! grep -q "AETHERLINK_HOME" "$rc_file"; then
+        echo "export AETHERLINK_HOME=\"\${HOME}/.aetherlink\"" >> "$rc_file"
+        echo "export PATH=\"\${AETHERLINK_HOME}/bin:\${PATH}\"" >> "$rc_file"
+    fi
+}
+
+# Verify installation
+verify_installation() {
+    echo "Verifying installation..."
+    
+    local check_paths=(
+        "$INSTALL_DIR/bin/caddy"
+        "$INSTALL_DIR/bin/aetherlink"
+        "$INSTALL_DIR/config/aetherlink_config.json"
+    )
+    
+    for path in "${check_paths[@]}"; do
+        if [[ ! -f "$path" ]]; then
+            echo "Error: Missing required file: $path" >&2
+            exit 1
+        fi
+    done
+    
+    # Test Caddy
+    if ! "$INSTALL_DIR/bin/caddy" version >/dev/null 2>&1; then
+        echo "Error: Caddy installation verification failed" >&2
+        exit 1
+    fi
+}
+
+# Cleanup function
+cleanup() {
+    echo "Cleaning up temporary files..."
+    rm -f /tmp/caddy.tar.gz
+}
+
+# Main installation process
+main() {
+    echo "Starting AetherLink installation..."
+    
+    setup_logging
+    check_system_requirements
+    create_directory_structure
+    download_caddy
+    configure_caddy
+    install_python_dependencies
+    create_cli_tools
+    verify_installation
+    cleanup
+    
+    echo "AetherLink installation completed successfully!"
+    echo "Please source your shell configuration file or restart your terminal"
+    echo "to use the 'aetherlink' command."
+}
+
+# Error handling
+trap 'echo "Installation failed. Check the log at $LOGFILE for details."; exit 1' ERR
+
+# Run installation
+main "$@"
