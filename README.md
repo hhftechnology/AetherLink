@@ -636,7 +636,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ##  Support
 
-- **Security Issues**: [security@hhftechnology.com](mailto:security@hhftechnology.com)
+- **Security Issues**: [security@hhftechnology.com](mailto:discourse@hhf.technology)
 - **Bug Reports**: [GitHub Issues](https://github.com/hhftechnology/AetherLink/issues)
 - **Feature Requests**: [GitHub Discussions](https://github.com/hhftechnology/AetherLink/discussions)
 - **Documentation**: [Wiki](https://github.com/hhftechnology/AetherLink/wiki)
