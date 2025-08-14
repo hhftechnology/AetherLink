@@ -12,26 +12,51 @@ import (
 	"time"
 )
 
-func RequestTunnel(url string) (map[string]interface{}, error) {
-	resp, err := http.Get(url)
+type TunnelInfo struct {
+	ID           string `json:"id"`
+	Port         int    `json:"port"`
+	MaxConnCount int    `json:"max_conn_count"`
+	URL          string `json:"url"`
+	AuthRequired bool   `json:"auth_required"`
+	Token        string `json:"token,omitempty"`
+}
+
+func RequestTunnel(url string, apiKey string) (*TunnelInfo, error) {
+	// Create request
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add API key if provided
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	// Make request
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("authentication failed: invalid or missing API key")
+		}
 		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 
-	var info map[string]interface{}
+	var info TunnelInfo
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		return nil, err
 	}
 
-	return info, nil
+	return &info, nil
 }
 
-func MaintainConnection(tcpAddr, localAddr, id string) {
+func MaintainConnection(tcpAddr, localAddr, id, token string) {
 	for {
 		conn, err := net.Dial("tcp", tcpAddr)
 		if err != nil {
@@ -39,6 +64,8 @@ func MaintainConnection(tcpAddr, localAddr, id string) {
 			time.Sleep(time.Second)
 			continue
 		}
+		
+		// Send tunnel ID
 		_, err = conn.Write([]byte(id + "\n"))
 		if err != nil {
 			log.Printf("Failed to send tunnel ID: %v", err)
@@ -46,6 +73,18 @@ func MaintainConnection(tcpAddr, localAddr, id string) {
 			time.Sleep(time.Second)
 			continue
 		}
+		
+		// Send authentication token if provided
+		if token != "" {
+			_, err = conn.Write([]byte(token + "\n"))
+			if err != nil {
+				log.Printf("Failed to send auth token: %v", err)
+				conn.Close()
+				time.Sleep(time.Second)
+				continue
+			}
+		}
+		
 		HandleConnection(conn, localAddr)
 	}
 }
