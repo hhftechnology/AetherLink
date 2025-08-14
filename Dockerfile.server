@@ -1,51 +1,15 @@
-# Dockerfile.server
-FROM ubuntu:22.04
+FROM golang:1.22 AS builder
+WORKDIR /app
+COPY . .
+RUN go mod download
+RUN go build -o lt-server ./cmd/lt-server
 
-# Prevent interactive prompts during installation
-ENV DEBIAN_FRONTEND=noninteractive
-ENV AETHERLINK_HOME=/opt/aetherlink
-ENV PATH="${AETHERLINK_HOME}/bin:${PATH}"
-
-# Install required packages
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    curl \
-    jq \
-    sudo \
-    libcap2-bin \
-    dos2unix \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create necessary directories
-RUN mkdir -p ${AETHERLINK_HOME}/{bin,config,logs,data,certs}
-
-# Copy all necessary files
-COPY aetherlink.py ${AETHERLINK_HOME}/bin/
-COPY aetherlink_config.json ${AETHERLINK_HOME}/config/
-COPY aetherlink-server.sh ${AETHERLINK_HOME}/bin/
-
-# Fix line endings and set permissions
-RUN dos2unix ${AETHERLINK_HOME}/bin/aetherlink-server.sh && \
-    chmod +x ${AETHERLINK_HOME}/bin/aetherlink.py && \
-    chmod +x ${AETHERLINK_HOME}/bin/aetherlink-server.sh
-
-# Download and install Caddy
-RUN cd ${AETHERLINK_HOME}/bin && \
-    curl -L -o caddy.tar.gz "https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz" && \
-    tar xzf caddy.tar.gz caddy && \
-    rm caddy.tar.gz && \
-    setcap 'cap_net_bind_service=+ep' caddy
-
-# Create symlinks
-RUN ln -sf ${AETHERLINK_HOME}/bin/aetherlink.py /usr/local/bin/aetherlink && \
-    ln -sf ${AETHERLINK_HOME}/bin/caddy /usr/local/bin/aetherlink-caddy
-
-# Set working directory
-WORKDIR ${AETHERLINK_HOME}
-
-# Expose necessary ports
-EXPOSE 443 2019
-
-# Set entrypoint with explicit shell
-ENTRYPOINT ["/bin/bash", "bin/aetherlink-server.sh"]
+FROM nginx:alpine-slim
+COPY --from=builder /app/lt-server /lt-server
+COPY config/nginx.conf /etc/nginx/nginx.conf
+RUN apk add --no-cache openssl && \
+    mkdir -p /etc/nginx/ssl && \
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl.key -out /etc/nginx/ssl.cert -subj "/CN=localhost"
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

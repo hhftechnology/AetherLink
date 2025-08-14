@@ -1,29 +1,9 @@
-# Client Dockerfile
-# filename: Dockerfile.client
-FROM python:3.9-slim
+FROM golang:1.22 AS builder
+WORKDIR /app
+COPY . .
+RUN go mod download
+RUN go build -o lt-client ./cmd/lt-client
 
-# Set environment variables
-ENV AETHERLINK_HOME=/opt/aetherlink
-ENV PATH="${AETHERLINK_HOME}/bin:${PATH}"
-
-# Install required packages
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create necessary directories
-RUN mkdir -p ${AETHERLINK_HOME}/{bin,config,logs}
-
-# Copy files
-COPY aetherlink.py ${AETHERLINK_HOME}/bin/
-RUN chmod +x ${AETHERLINK_HOME}/bin/aetherlink.py
-
-# Create symlink
-RUN ln -s ${AETHERLINK_HOME}/bin/aetherlink.py /usr/local/bin/aetherlink
-
-# Set working directory
-WORKDIR ${AETHERLINK_HOME}
-
-# Default command (can be overridden)
-ENTRYPOINT ["aetherlink"]
-CMD ["--help"]
+FROM gcr.io/distroless/base
+COPY --from=builder /app/lt-client /
+CMD ["/lt-client"]
