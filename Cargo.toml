@@ -14,8 +14,10 @@ name = "aetherlink"
 path = "src/main.rs"
 
 [dependencies]
-# Core dependencies
-iroh = { version = "0.28.1", features = ["metrics"] }
+# Core dependencies - using same version as pirohxy
+iroh = "0.28.1"
+iroh-base = "0.28.1" 
+iroh-net = "0.28.1"
 tokio = { version = "1.41", features = ["full"] }
 anyhow = "1.0"
 tracing = "0.1"
@@ -37,11 +39,11 @@ bytes = "1.8"
 
 # Utilities
 directories = "5.0"
-ed25519-dalek = { version = "2.1", features = ["pem"] }
-rand_core = { version = "0.6", features = ["getrandom"] }
+ed25519-dalek = { version = "2.1", features = ["pem", "pkcs8"] }
 futures-util = "0.3"
 url = "2.5"
 base64 = "0.22"
+shellexpand = "3.1"
 
 [dev-dependencies]
 tempfile = "3.10"

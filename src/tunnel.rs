@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// ALPN protocol identifier for AetherLink tunnels
-pub const TUNNEL_ALPN: &[u8] = b"/aetherlink/tunnel/1.0.0";
+pub const TUNNEL_ALPN: &[u8] = b"aetherlink/tunnel/1.0.0";
 
 /// Messages exchanged between client and server
 #[derive(Debug, Clone, Serialize, Deserialize)]
