@@ -1,15 +1,75 @@
-FROM golang:1.22 AS builder
-WORKDIR /app
-COPY . .
-RUN go mod download
-RUN go build -o lt-server ./cmd/lt-server
+# Supports both IP-only and domain modes with automatic detection
 
+FROM golang:1.22-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates
+
+# Set working directory
+WORKDIR /app
+
+# Copy source code
+COPY . .
+
+# Download dependencies and build
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags '-w -s' -o aetherlink-server ./cmd/lt-server
+
+# Production stage
 FROM nginx:alpine-slim
-COPY --from=builder /app/lt-server /lt-server
-COPY config/nginx.conf /etc/nginx/nginx.conf
-RUN apk add --no-cache openssl && \
-    mkdir -p /etc/nginx/ssl && \
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl.key -out /etc/nginx/ssl.cert -subj "/CN=localhost"
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    curl \
+    wget \
+    openssl \
+    jq \
+    bash \
+    && rm -rf /var/cache/apk/*
+
+# Copy the binary from builder
+COPY --from=builder /app/aetherlink-server /usr/local/bin/aetherlink-server
+RUN chmod +x /usr/local/bin/aetherlink-server
+
+# Create directories
+RUN mkdir -p /etc/nginx/templates /etc/nginx/ssl /var/log/aetherlink /var/run/nginx
+
+# Copy nginx configuration templates
+COPY docker/nginx/ /etc/nginx/templates/
+
+# Copy scripts
+COPY docker/scripts/ /usr/local/bin/
+RUN chmod +x /usr/local/bin/*.sh
+
+# Generate default SSL certificates
+RUN openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /etc/nginx/ssl/server.key \
+    -out /etc/nginx/ssl/server.crt \
+    -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost"
+
+# Set default environment variables
+ENV MODE=auto
+ENV DOMAIN=""
+ENV USE_SSL=auto
+ENV SERVER_PORT=8080
+
+# Expose all possible ports
+EXPOSE 80 443 8080 62322
+
+# Add labels for Docker Hub
+LABEL maintainer="AetherLink Team"
+LABEL description="Universal AetherLink tunnel server supporting both IP-only and domain modes"
+LABEL version="1.1.0"
+LABEL org.opencontainers.image.title="AetherLink"
+LABEL org.opencontainers.image.description="Secure tunneling solution with automatic mode detection"
+LABEL org.opencontainers.image.source="https://github.com/hhftechnology/AetherLink"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD /usr/local/bin/health-check.sh
+
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["--address=127.0.0.1", "--port=8080"]
