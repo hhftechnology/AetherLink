@@ -2,6 +2,8 @@ package server
 
 import (
 	"net/http"
+
+	"github.com/hhftechnology/AetherLink/internal/auth"
 )
 
 type Server struct {
@@ -10,8 +12,8 @@ type Server struct {
 	manager *ClientManager
 }
 
-func NewServer(address, port, domain string, secure bool) *Server {
-	m := NewClientManager(domain, secure)
+func NewServer(address, port, domain string, secure bool, tokenManager *auth.TokenManager) *Server {
+	m := NewClientManager(domain, secure, tokenManager)
 	http.HandleFunc("/", m.handler)
 	return &Server{
 		address: address,
