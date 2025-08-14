@@ -15,13 +15,13 @@ path = "src/main.rs"
 
 [dependencies]
 # Core dependencies - using same version as pirohxy
-iroh = "0.28.1"
-iroh-base = "0.28.1" 
-iroh-net = "0.28.1"
-tokio = { version = "1.41", features = ["full"] }
+iroh = { version = "0.91.1", features = ["full"] }
+iroh-base = "0.91.1" 
+iroh-net = "0.91.1"
+tokio = { version = "1.41.1", features = ["full"] }
 anyhow = "1.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
 
 # CLI and configuration
 clap = { version = "4.5", features = ["derive", "env"] }
