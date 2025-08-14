@@ -1,0 +1,141 @@
+{
+  "logging": {
+    "logs": {
+      "default": {
+        "level": "INFO",
+        "writer": {
+          "output": "file",
+          "filename": "~/.aetherlink/logs/caddy.log",
+          "roll_size_mb": 100,
+          "max_age": "30d",
+          "max_backups": 10
+        },
+        "format": "json",
+        "include_timestamps": true
+      },
+      "access": {
+        "writer": {
+          "output": "file",
+          "filename": "~/.aetherlink/logs/access.log",
+          "roll_size_mb": 100,
+          "max_age": "30d",
+          "max_backups": 10
+        },
+        "format": "json",
+        "include_timestamps": true
+      }
+    }
+  },
+  "admin": {
+    "listen": "127.0.0.1:2019",
+    "enforce_origin": true,
+    "origins": ["localhost"],
+    "config": {
+      "persist": false
+    }
+  },
+  "apps": {
+    "http": {
+      "grace_period": "30s",
+      "servers": {
+        "aetherlink": {
+          "listen": [":443"],
+          "allow_h2c": false,
+          "timeouts": {
+            "read_body": "10s",
+            "read_header": "10s",
+            "write": "30s",
+            "idle": "120s"
+          },
+          "routes": [],
+          "tls_connection_policies": [{
+            "certificate_selection": {
+              "any_tag": ["cert0"]
+            },
+            "cipher_suites": [
+              "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+              "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+              "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+              "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+            ],
+            "curves": ["x25519", "secp256r1", "secp384r1"],
+            "alpn": ["h2", "http/1.1"],
+            "default_sni": "aetherlink.local"
+          }],
+          "metrics": {
+            "enable": true,
+            "path": "/metrics",
+            "listen": "127.0.0.1:2020"
+          },
+          "errors": {
+            "writer": {
+              "output": "file",
+              "filename": "~/.aetherlink/logs/error.log"
+            }
+          },
+          "protocols": ["h1", "h2"],
+          "strict_sni_host": true,
+          "trusted_proxies": ["local"],
+          "compression": {
+            "enable": true,
+            "minimum_length": 1024,
+            "types": [
+              "text/*", 
+              "application/json",
+              "application/javascript",
+              "application/x-javascript",
+              "application/ecmascript",
+              "application/xml"
+            ]
+          },
+          "auto_https": {
+            "disable": false,
+            "disable_redirects": false,
+            "skip": []
+          },
+          "health_checks": {
+            "active": {
+              "uri": "/health",
+              "port": 0,
+              "interval": "30s",
+              "timeout": "5s",
+              "expect_status": 200
+            }
+          }
+        }
+      }
+    },
+    "tls": {
+      "certificates": {
+        "automate": ["*.aetherlink.local"],
+        "trusted_issuers": [
+          {
+            "module": "internal",
+            "root": "~/.aetherlink/certs/root.crt"
+          }
+        ],
+        "providers": {
+          "module": "internal"
+        }
+      },
+      "automation": {
+        "policies": [{
+          "issuers": [{
+            "module": "acme",
+            "email": "admin@aetherlink.local",
+            "ca": "https://acme-v02.api.letsencrypt.org/directory",
+            "challenges": {
+              "http-01": {
+                "alternate_port": 8080
+              }
+            }
+          }]
+        }]
+      }
+    }
+  },
+  "storage": {
+    "module": "file_system",
+    "root": "~/.aetherlink/data"
+  }
+}
