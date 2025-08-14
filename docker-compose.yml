@@ -1,0 +1,53 @@
+services:
+  aetherlink-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aetherlink-server
+    restart: unless-stopped
+    environment:
+      - AETHERLINK_LOG_LEVEL=info
+    volumes:
+      - aetherlink-config:/home/aetherlink/.aetherlink
+      - aetherlink-data:/home/aetherlink/data
+    ports:
+      - "2019:2019"  # Admin API (optional, only expose if needed)
+    networks:
+      - aetherlink-net
+    command: server --admin-bind 0.0.0.0:2019
+    labels:
+      - "com.aetherlink.description=AetherLink Server Node"
+      - "com.aetherlink.version=3.0.0"
+
+  # Example client container (uncomment and configure as needed)
+  # aetherlink-client:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: aetherlink-client
+  #   restart: unless-stopped
+  #   environment:
+  #     - AETHERLINK_LOG_LEVEL=info
+  #     - AETHERLINK_SERVER=your-server-node-id
+  #   volumes:
+  #     - aetherlink-client-config:/home/aetherlink/.aetherlink
+  #   networks:
+  #     - aetherlink-net
+  #   command: tunnel example.com --local-port 3000 --bind 0.0.0.0:8080
+  #   depends_on:
+  #     - aetherlink-server
+
+volumes:
+  aetherlink-config:
+    driver: local
+  aetherlink-data:
+    driver: local
+  # aetherlink-client-config:
+  #   driver: local
+
+networks:
+  aetherlink-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
