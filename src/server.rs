@@ -1,13 +1,14 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
-use iroh_net::endpoint::{Endpoint, Connection};
-use iroh_base::key::NodeId;
+use iroh::protocol::{Router, ProtocolHandler};
+use iroh::{Endpoint, NodeId};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -29,33 +30,22 @@ pub async fn run_server(
     // Start Iroh endpoint
     let endpoint = Endpoint::builder()
         .secret_key(identity.secret_key.clone())
-        .alpns(vec![TUNNEL_ALPN.to_vec()])
-        .bind(0)
+        .discovery_n0()
+        .bind()
         .await?;
     
     info!("Server listening on Iroh network");
     info!("Node ID: {}", identity.node_id());
     
-    // Handle incoming connections
-    let accept_state = state.clone();
-    let accept_auth = auth.clone();
-    let accept_endpoint = endpoint.clone();
-    tokio::spawn(async move {
-        loop {
-            match accept_endpoint.accept().await {
-                Some(incoming) => {
-                    let state = accept_state.clone();
-                    let auth = accept_auth.clone();
-                    tokio::spawn(async move {
-                        if let Ok(conn) = incoming.accept().await {
-                            handle_connection(conn, state, auth).await;
-                        }
-                    });
-                }
-                None => break,
-            }
-        }
-    });
+    // Start tunnel protocol handler
+    let handler = TunnelHandler {
+        state: state.clone(),
+        auth: auth.clone(),
+    };
+    
+    let router = Router::builder(endpoint.clone())
+        .accept(TUNNEL_ALPN, handler)
+        .spawn();
     
     // Start admin API
     let admin_listener = TcpListener::bind(admin_bind).await?;
@@ -90,91 +80,8 @@ pub async fn run_server(
     tokio::signal::ctrl_c().await?;
     info!("Shutting down server...");
     
+    router.shutdown().await?;
     Ok(())
-}
-
-async fn handle_connection(
-    conn: Connection,
-    state: Arc<ServerState>,
-    auth: Arc<Auth>,
-) {
-    let client_id = conn.remote_node_id();
-    
-    // Check authorization
-    if !auth.is_authorized(&client_id.to_string()) {
-        warn!("Unauthorized client attempted connection: {}", client_id);
-        return;
-    }
-    
-    debug!("Accepted connection from {}", client_id);
-    
-    // Handle tunnel requests
-    loop {
-        match conn.accept_bi().await {
-            Ok((mut send, mut recv)) => {
-                // Read tunnel message
-                let mut buf = Vec::new();
-                if recv.read_to_end(1024 * 1024, &mut buf).await.is_err() {
-                    break;
-                }
-                
-                match serde_json::from_slice::<TunnelMessage>(&buf) {
-                    Ok(msg) => match msg {
-                        TunnelMessage::Register { domain, port } => {
-                            match state.register_tunnel(domain.clone(), client_id, port).await {
-                                Ok(_) => {
-                                    let response = TunnelMessage::Registered { domain };
-                                    if let Ok(data) = serde_json::to_vec(&response) {
-                                        let _ = send.write_all(&data).await;
-                                        let _ = send.finish();
-                                    }
-                                }
-                                Err(e) => {
-                                    let response = TunnelMessage::Error { 
-                                        message: e.to_string() 
-                                    };
-                                    if let Ok(data) = serde_json::to_vec(&response) {
-                                        let _ = send.write_all(&data).await;
-                                        let _ = send.finish();
-                                    }
-                                }
-                            }
-                        }
-                        TunnelMessage::Unregister { domain } => {
-                            state.unregister_tunnel(&domain).await;
-                            let response = TunnelMessage::Unregistered { domain };
-                            if let Ok(data) = serde_json::to_vec(&response) {
-                                let _ = send.write_all(&data).await;
-                                let _ = send.finish();
-                            }
-                        }
-                        TunnelMessage::List => {
-                            let tunnels = state.list_tunnels().await;
-                            let domains: Vec<String> = tunnels.iter()
-                                .filter(|t| t.client_id == client_id)
-                                .map(|t| t.domain.clone())
-                                .collect();
-                            let response = TunnelMessage::TunnelList { tunnels: domains };
-                            if let Ok(data) = serde_json::to_vec(&response) {
-                                let _ = send.write_all(&data).await;
-                                let _ = send.finish();
-                            }
-                        }
-                        _ => {
-                            warn!("Unexpected message from client");
-                        }
-                    },
-                    Err(e) => {
-                        error!("Failed to parse tunnel message: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                debug!("Connection closed: {}", e);
-                break;
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -230,6 +137,101 @@ impl ServerState {
     async fn list_tunnels(&self) -> Vec<TunnelInfo> {
         let tunnels = self.tunnels.read().await;
         tunnels.values().cloned().collect()
+    }
+}
+
+struct TunnelHandler {
+    state: Arc<ServerState>,
+    auth: Arc<Auth>,
+}
+
+impl ProtocolHandler for TunnelHandler {
+    fn accept(
+        &self,
+        conn: iroh::endpoint::Connection,
+    ) -> impl std::future::Future<Output = Result<(), iroh::protocol::AcceptError>> + Send {
+        let state = self.state.clone();
+        let auth = self.auth.clone();
+        
+        async move {
+            let client_id = conn.remote_node_id()?;
+            
+            // Check authorization
+            if !auth.is_authorized(&client_id.to_string()) {
+                warn!("Unauthorized client attempted connection: {}", client_id);
+                return Err(iroh::protocol::AcceptError::User {
+                    source: anyhow::anyhow!("Unauthorized client").into(),
+                });
+            }
+            
+            debug!("Accepted connection from {}", client_id);
+            
+            // Handle tunnel requests
+            loop {
+                match conn.accept_bi().await {
+                    Ok((send, mut recv)) => {
+                        // Read tunnel message
+                        let mut buf = Vec::new();
+                        recv.read_to_end(1024 * 1024, &mut buf).await?;
+                        
+                        match serde_json::from_slice::<TunnelMessage>(&buf) {
+                            Ok(msg) => {
+                                match msg {
+                                    TunnelMessage::Register { domain, port } => {
+                                        match state.register_tunnel(domain.clone(), client_id, port).await {
+                                            Ok(_) => {
+                                                let response = TunnelMessage::Registered { domain };
+                                                let data = serde_json::to_vec(&response)?;
+                                                send.write_all(&data).await?;
+                                                send.finish()?;
+                                            }
+                                            Err(e) => {
+                                                let response = TunnelMessage::Error { 
+                                                    message: e.to_string() 
+                                                };
+                                                let data = serde_json::to_vec(&response)?;
+                                                send.write_all(&data).await?;
+                                                send.finish()?;
+                                            }
+                                        }
+                                    }
+                                    TunnelMessage::Unregister { domain } => {
+                                        state.unregister_tunnel(&domain).await;
+                                        let response = TunnelMessage::Unregistered { domain };
+                                        let data = serde_json::to_vec(&response)?;
+                                        send.write_all(&data).await?;
+                                        send.finish()?;
+                                    }
+                                    TunnelMessage::List => {
+                                        let tunnels = state.list_tunnels().await;
+                                        let domains: Vec<String> = tunnels.iter()
+                                            .filter(|t| t.client_id == client_id)
+                                            .map(|t| t.domain.clone())
+                                            .collect();
+                                        let response = TunnelMessage::TunnelList { tunnels: domains };
+                                        let data = serde_json::to_vec(&response)?;
+                                        send.write_all(&data).await?;
+                                        send.finish()?;
+                                    }
+                                    _ => {
+                                        warn!("Unexpected message from client");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to parse tunnel message: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Connection closed: {}", e);
+                        break;
+                    }
+                }
+            }
+            
+            Ok(())
+        }
     }
 }
 

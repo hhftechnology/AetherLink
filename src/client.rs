@@ -4,8 +4,8 @@ use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http1;
 use hyper::server::conn::http1 as server_http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
-use iroh_net::endpoint::Endpoint;
+use hyper::{Request, Response, StatusCode, Uri};
+use iroh::Endpoint;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -23,26 +23,21 @@ pub async fn create_tunnel(
     local_port: u16,
     bind_addr: SocketAddr,
 ) -> Result<()> {
-    use iroh_base::key::NodeId;
-    use std::str::FromStr;
-    
     // Parse server node ID
-    let server_node_id = NodeId::from_str(&server_id)
+    let server_node_id = server_id.parse()
         .context("Invalid server node ID")?;
     
     // Start Iroh endpoint
     let endpoint = Endpoint::builder()
         .secret_key(identity.secret_key.clone())
-        .alpns(vec![TUNNEL_ALPN.to_vec()])
-        .bind(0)
+        .discovery_n0()
+        .bind()
         .await?;
     
     info!("Connecting to server: {}", server_id);
     
-    // Connect to server  
-    use iroh_net::NodeAddr;
-    let node_addr = NodeAddr::new(server_node_id);
-    let conn = endpoint.connect(node_addr, &TUNNEL_ALPN).await
+    // Connect to server
+    let conn = endpoint.connect(server_node_id, TUNNEL_ALPN).await
         .context("Failed to connect to server")?;
     
     // Register tunnel
@@ -132,7 +127,7 @@ pub async fn create_tunnel(
 
 async fn handle_client_request(
     stream: TcpStream,
-    _conn: Arc<iroh_net::endpoint::Connection>,
+    _conn: Arc<iroh::endpoint::Connection>,
     domain: String,
     local_port: u16,
 ) -> Result<()> {
@@ -228,24 +223,19 @@ pub async fn list_tunnels(
     identity: Identity,
     server_id: String,
 ) -> Result<()> {
-    use iroh_base::key::NodeId;
-    use std::str::FromStr;
-    
     // Parse server node ID
-    let server_node_id = NodeId::from_str(&server_id)
+    let server_node_id = server_id.parse()
         .context("Invalid server node ID")?;
     
     // Start Iroh endpoint
     let endpoint = Endpoint::builder()
         .secret_key(identity.secret_key.clone())
-        .alpns(vec![TUNNEL_ALPN.to_vec()])
-        .bind(0)
+        .discovery_n0()
+        .bind()
         .await?;
     
     // Connect to server
-    use iroh_net::NodeAddr;
-    let node_addr = NodeAddr::new(server_node_id);
-    let conn = endpoint.connect(node_addr, &TUNNEL_ALPN).await
+    let conn = endpoint.connect(server_node_id, TUNNEL_ALPN).await
         .context("Failed to connect to server")?;
     
     // Request tunnel list

@@ -209,24 +209,17 @@ async fn main() -> Result<()> {
         }
 
         Commands::AddServer { name, node_id } => {
-            use iroh_base::key::NodeId;
-            use std::str::FromStr;
-            
-            let server_id = NodeId::from_str(&node_id)
-                .context("Invalid node ID format")?
-                .to_string();
+            let server_id = node_id.parse()
+                .context("Invalid node ID format")?;
             
             config.servers.insert(name.clone(), server_id);
             config.save(&config_path)?;
             
-            info!("✓ Added server alias '{}' → {}", name, node_id);
+            info!("✓ Added server alias '{}' → {}", name, server_id);
         }
 
         Commands::Authorize { client_id } => {
-            use iroh_base::key::NodeId;
-            use std::str::FromStr;
-            
-            let client_node_id = NodeId::from_str(&client_id)
+            let client_node_id = client_id.parse()
                 .context("Invalid client node ID")?;
             
             let auth_file = config_path.join("auth").join(&client_id);
@@ -248,4 +241,15 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+mod shellexpand {
+    pub fn tilde(s: &str) -> std::borrow::Cow<str> {
+        if s.starts_with("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                return std::borrow::Cow::Owned(s.replacen("~", &home, 1));
+            }
+        }
+        std::borrow::Cow::Borrowed(s)
+    }
 }

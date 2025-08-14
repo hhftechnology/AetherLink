@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use ed25519_dalek::SigningKey;
-use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding};
-use iroh_base::key::SecretKey;
+use ed25519_dalek::{SigningKey, pkcs8::{DecodePrivateKey, EncodePrivateKey}};
+use iroh::SecretKey;
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -76,7 +76,7 @@ impl Default for Config {
 
 impl Identity {
     pub fn generate() -> Self {
-        let secret_key = SecretKey::generate();
+        let secret_key = SecretKey::generate(&mut OsRng);
         Self { secret_key }
     }
 
@@ -89,15 +89,14 @@ impl Identity {
             .with_context(|| format!("Failed to read identity file: {:?}", path))?;
         let signing_key = SigningKey::from_pkcs8_pem(&pem)
             .context("Failed to parse identity key")?;
-        let bytes = signing_key.to_bytes();
-        let secret_key = SecretKey::from_bytes(&bytes);
-        Ok(Self { secret_key })
+        Ok(Self {
+            secret_key: signing_key.into(),
+        })
     }
 
     pub fn to_file(&self, path: &Path) -> Result<()> {
-        let bytes = self.secret_key.to_bytes();
-        let signing_key = SigningKey::from_bytes(&bytes);
-        let pem = signing_key.to_pkcs8_pem(LineEnding::default())
+        let signing_key: SigningKey = self.secret_key.secret().clone();
+        let pem = signing_key.to_pkcs8_pem(ed25519_dalek::pkcs8::spki::der::pem::LineEnding::default())
             .context("Failed to encode identity key")?;
         std::fs::write(path, pem.as_bytes())
             .with_context(|| format!("Failed to write identity file: {:?}", path))?;
@@ -114,7 +113,8 @@ mod secret_key_serde {
     where
         S: Serializer,
     {
-        let bytes = key.to_bytes();
+        let signing_key: SigningKey = key.secret().clone();
+        let bytes = signing_key.to_bytes();
         let encoded = STANDARD.encode(&bytes);
         serializer.serialize_str(&encoded)
     }
@@ -126,9 +126,10 @@ mod secret_key_serde {
         let encoded = String::deserialize(deserializer)?;
         let bytes = STANDARD.decode(&encoded)
             .map_err(serde::de::Error::custom)?;
-        let bytes_32: [u8; 32] = bytes.try_into()
-            .map_err(|_| serde::de::Error::custom("Invalid key length"))?;
-        Ok(SecretKey::from_bytes(&bytes_32))
+        let signing_key = SigningKey::from_bytes(&bytes.try_into().map_err(|_| {
+            serde::de::Error::custom("Invalid key length")
+        })?);
+        Ok(signing_key.into())
     }
 }
 

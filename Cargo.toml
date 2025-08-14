@@ -14,11 +14,17 @@ name = "aetherlink"
 path = "src/main.rs"
 
 [dependencies]
+<<<<<<< HEAD
 # Core dependencies - using same version as pirohxy
 iroh = { version = "0.91.1", features = ["full"] }
 iroh-base = "0.91.1" 
 iroh-net = "0.91.1"
 tokio = { version = "1.41.1", features = ["full"] }
+=======
+# Core dependencies
+iroh = { version = "0.28.1", features = ["metrics"] }
+tokio = { version = "1.41", features = ["full"] }
+>>>>>>> parent of b8d9924 (update)
 anyhow = "1.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
@@ -39,11 +45,11 @@ bytes = "1.8"
 
 # Utilities
 directories = "5.0"
-ed25519-dalek = { version = "2.1", features = ["pem", "pkcs8"] }
+ed25519-dalek = { version = "2.1", features = ["pem"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 futures-util = "0.3"
 url = "2.5"
 base64 = "0.22"
-shellexpand = "3.1"
 
 [dev-dependencies]
 tempfile = "3.10"
